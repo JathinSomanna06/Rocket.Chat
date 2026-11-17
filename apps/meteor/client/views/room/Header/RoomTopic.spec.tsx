@@ -6,6 +6,12 @@ import { render, screen } from '@testing-library/react';
 import RoomTopic from './RoomTopic';
 import FakeRoomProvider from '../../../../tests/mocks/client/FakeRoomProvider';
 import { createFakeRoom, createFakeSubscription, createFakeUser } from '../../../../tests/mocks/data';
+import * as meteorRuntimeConfig from '../../../lib/meteorRuntimeConfig';
+
+jest.mock('../../../lib/meteorRuntimeConfig', () => ({
+	...jest.requireActual('../../../lib/meteorRuntimeConfig'),
+	getRootUrlPathPrefix: jest.fn(() => ''),
+}));
 
 const user = createFakeUser({
 	active: true,
@@ -30,8 +36,12 @@ const user3 = createFakeUser({
 });
 
 describe('RoomTopic', () => {
+	afterEach(() => {
+		jest.mocked(meteorRuntimeConfig.getRootUrlPathPrefix).mockReturnValue('');
+	});
+
 	it('should render Add Topic when no topic is present and user can edit room', () => {
-		const room = createFakeRoom({ topic: '', t: 'c', u: { _id: user._id, username: user.username, name: user.name } });
+		const room = createFakeRoom({ name: 'test-room', topic: '', t: 'c', u: { _id: user._id, username: user.username, name: user.name } });
 		const subscription = createFakeSubscription({ t: 'c', rid: room._id, u: room.u, roles: ['owner'] });
 
 		render(
@@ -48,6 +58,62 @@ describe('RoomTopic', () => {
 		);
 
 		expect(screen.getByText('Add_topic')).toBeInTheDocument();
+	});
+
+	it.each([
+		{ label: 'a channel', t: 'c', teamMain: false, route: '/channel/room%20%231', tab: 'channel-settings' },
+		{ label: 'a private group', t: 'p', teamMain: false, route: '/group/room%20%231', tab: 'channel-settings' },
+		{ label: 'a team', t: 'c', teamMain: true, route: '/channel/room%20%231', tab: 'team-info' },
+		{ label: 'a private team', t: 'p', teamMain: true, route: '/group/room%20%231', tab: 'team-info' },
+	] as const)('should link to the settings page for $label from an open thread', ({ t, teamMain, route, tab }) => {
+		jest.mocked(meteorRuntimeConfig.getRootUrlPathPrefix).mockReturnValue('/subdir');
+
+		const room = createFakeRoom({ name: 'room #1', topic: '', t, teamMain, u: { _id: user._id, username: user.username } });
+		const subscription = createFakeSubscription({ t, rid: room._id, u: room.u, roles: ['owner'] });
+		const getRoomRoute = jest.fn().mockReturnValue({ path: route });
+
+		render(
+			<FakeRoomProvider roomOverrides={room} subscriptionOverrides={subscription}>
+				<RoomTopic room={room} />
+			</FakeRoomProvider>,
+			{
+				wrapper: mockAppRoot()
+					.withSubscriptions([{ ...subscription, ...room }] as unknown as SubscriptionWithRoom[])
+					.withPermission('edit-room')
+					.withUser(user)
+					.withRouter({
+						getLocationPathname: () => `${route}/thread/message-id`,
+						getRoomRoute,
+					})
+					.build(),
+			},
+		);
+
+		expect(screen.getByRole('link', { name: 'Add_topic' })).toHaveAttribute('href', `/subdir${route}/${tab}`);
+		expect(getRoomRoute).toHaveBeenCalledWith(t, { name: 'room%20%231' });
+	});
+
+	it('should not render Add Topic when the room has no route name', () => {
+		const room = createFakeRoom({ name: undefined, topic: '', t: 'c', u: { _id: user._id, username: user.username } });
+		const subscription = createFakeSubscription({ t: 'c', rid: room._id, u: room.u, roles: ['owner'] });
+		const getRoomRoute = jest.fn();
+
+		render(
+			<FakeRoomProvider roomOverrides={room} subscriptionOverrides={subscription}>
+				<RoomTopic room={room} />
+			</FakeRoomProvider>,
+			{
+				wrapper: mockAppRoot()
+					.withSubscriptions([{ ...subscription, ...room }] as unknown as SubscriptionWithRoom[])
+					.withPermission('edit-room')
+					.withUser(user)
+					.withRouter({ getRoomRoute })
+					.build(),
+			},
+		);
+
+		expect(screen.queryByText('Add_topic')).not.toBeInTheDocument();
+		expect(getRoomRoute).not.toHaveBeenCalled();
 	});
 
 	it('should not render Add Topic when no topic is present and user cannot edit room', () => {
